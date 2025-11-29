@@ -363,7 +363,7 @@ def main():
                 df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                 write_players_df(df)
                 st.success(f"{name} を登録しました。")
-                st.experimental_rerun()
+                st.rerun()
 
     # 簡単なサマリー
     with st.container():
@@ -448,7 +448,7 @@ def main():
                         df.loc[idx, "updated_at"] = datetime.now().isoformat(timespec="seconds")
                         write_players_df(df)
                         st.success(f"{row['name']} に Rebuy {int(rebuy_amount):,} を追加しました。")
-                        st.experimental_rerun()
+                        st.rerun()
 
     st.markdown("---")
 
@@ -482,7 +482,7 @@ def main():
                 df.loc[idx, "updated_at"] = datetime.now().isoformat(timespec="seconds")
                 write_players_df(df)
                 st.success(f"{selected_name_fs} の最終Stackを {int(final_stack_val):,} に更新しました。")
-                st.experimental_rerun()
+                st.rerun()
 
     st.markdown("---")
 
@@ -621,7 +621,7 @@ def main():
         )
         write_players_df(empty_df)
         st.success("全データをリセットしました。")
-        st.experimental_rerun()
+        st.rerun()
 
 
 if __name__ == "__main__":
