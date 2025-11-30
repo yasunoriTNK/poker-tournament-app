@@ -138,6 +138,25 @@ def update_player_row(player_id: str, updates: dict):
 
     load_players_df.clear()
 
+def reset_players_sheet():
+    ws = get_worksheet()
+    ws.clear()
+    ws.append_row(
+        [
+            "player_id",
+            "name",
+            "team",
+            "skill",
+            "initial_buyin",
+            "rebuy_total",
+            "rebuy_times",
+            "final_stack",
+            "created_at",
+            "updated_at",
+        ]
+    )
+    load_players_df.clear()
+
 
 # --------------------------
 # Streamlit UI / ロジック
@@ -569,3 +588,19 @@ else:
             ),
             use_container_width=True,
         )
+
+st.markdown("---")
+st.subheader(⚠️ データリセット")
+
+with st.expander("データリセット（注意）"):
+    st.warning("全プレイヤー情報を削除し、登録状態を初期化します。元に戻せません。")
+
+    if st.button("全データをリセットする", type="primary"):
+        if st.session_state.get("confirm_reset", False) is False:
+            st.session_state["confirm_reset"] = True
+            st.warning("本当にリセットしますか？もう一度このボタンを押してください。")
+        else:
+            reset_players_sheet()
+            st.success("データをリセットしました。")
+            st.session_state["confirm_reset"] = False
+            st.rerun()
