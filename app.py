@@ -508,64 +508,59 @@ else:
 
         df_rank["handicap_profit"] = df_rank.apply(calc_handicap, axis=1)
 
-        # 表示用列
-        display_cols = [
-            "name",
-            "team",
-            "skill",
-            "initial_buyin",
-            "rebuy_total",
-            "final_stack",
-            "profit",
-            "handicap_profit",
-        ]
-
+        # --------------------------
         # 個人ランキング（素点収支）
+        # --------------------------
         st.subheader("個人ランキング（素点収支）")
+
         df_individual = df_rank.sort_values(
             by=["profit", "created_at"], ascending=[False, True]
         ).reset_index(drop=True)
-        df_individual.index = df_individual.index + 1
+        df_individual["No"] = df_individual.index + 1
+
+        table_individual = df_individual[["No", "name", "skill", "profit"]].rename(
+            columns={
+                "name": "プレイヤー",
+                "skill": "スキル",
+                "profit": "素点収支",
+            }
+        )
+
         st.dataframe(
-            df_individual[display_cols].rename(
-                columns={
-                    "name": "プレイヤー",
-                    "team": "チーム",
-                    "skill": "スキル",
-                    "initial_buyin": "初期Buy-in",
-                    "rebuy_total": "Re-buy合計",
-                    "final_stack": "最終Stack",
-                    "profit": "素点収支",
-                    "handicap_profit": "handicap収支",
-                }
-            ),
+            table_individual,
             use_container_width=True,
         )
 
+        # --------------------------
         # 個人ランキング（handicap収支）
+        # --------------------------
         st.subheader("個人ランキング（handicap収支）")
+
         df_individual_h = df_rank.sort_values(
             by=["handicap_profit", "created_at"], ascending=[False, True]
         ).reset_index(drop=True)
-        df_individual_h.index = df_individual_h.index + 1
+        df_individual_h["No"] = df_individual_h.index + 1
+
+        table_individual_h = df_individual_h[
+            ["No", "name", "skill", "handicap_profit"]
+        ].rename(
+            columns={
+                "name": "プレイヤー",
+                "skill": "スキル",
+                "handicap_profit": "handicap収支",
+            }
+        )
+
         st.dataframe(
-            df_individual_h[display_cols].rename(
-                columns={
-                    "name": "プレイヤー",
-                    "team": "チーム",
-                    "skill": "スキル",
-                    "initial_buyin": "初期Buy-in",
-                    "rebuy_total": "Re-buy合計",
-                    "final_stack": "最終Stack",
-                    "profit": "素点収支",
-                    "handicap_profit": "handicap収支",
-                }
-            ),
+            table_individual_h,
             use_container_width=True,
         )
 
-        # チーム別集計
-        st.subheader("チームランキング（素点収支 / handicap収支）")
+        # --------------------------
+        # チームランキング（素点 / handicap 別表示）
+        # --------------------------
+        st.subheader("チームランキング（素点収支）")
+
         team_agg = (
             df_rank.groupby("team")
             .agg(
@@ -579,15 +574,40 @@ else:
             .reset_index()
         )
 
-        team_agg = team_agg.sort_values(by="profit", ascending=False)
+        # 素点収支ランキング
+        team_profit_rank = team_agg.sort_values(by="profit", ascending=False).reset_index(drop=True)
+        team_profit_rank["No"] = team_profit_rank.index + 1
+        table_team_profit = team_profit_rank[
+            ["No", "team", "人数", "profit"]
+        ].rename(
+            columns={
+                "team": "チーム",
+                "profit": "素点収支合計",
+            }
+        )
+
         st.dataframe(
-            team_agg.rename(
-                columns={
-                    "team": "チーム",
-                    "profit": "素点収支合計",
-                    "handicap_profit": "handicap収支合計",
-                }
-            ),
+            table_team_profit,
+            use_container_width=True,
+        )
+
+        st.subheader("チームランキング（handicap収支）")
+
+        team_handicap_rank = team_agg.sort_values(
+            by="handicap_profit", ascending=False
+        ).reset_index(drop=True)
+        team_handicap_rank["No"] = team_handicap_rank.index + 1
+        table_team_handicap = team_handicap_rank[
+            ["No", "team", "人数", "handicap_profit"]
+        ].rename(
+            columns={
+                "team": "チーム",
+                "handicap_profit": "handicap収支合計",
+            }
+        )
+
+        st.dataframe(
+            table_team_handicap,
             use_container_width=True,
         )
 
@@ -596,7 +616,7 @@ else:
 # --------------------------
 
 st.markdown("---")
-st.subheader("\N{WARNING SIGN} データリセット")
+st.subheader("データリセット（注意）")
 
 with st.expander("データリセット（注意）"):
     st.warning("全プレイヤー情報を削除し、登録状態を初期化します。元に戻せません。")
