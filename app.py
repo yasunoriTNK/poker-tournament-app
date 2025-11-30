@@ -150,25 +150,31 @@ st.set_page_config(
     layout="centered",
 )
 
-# プレイヤー名の可読性向上 CSS
+# スマホ向けのコンパクトなプレイヤーカード用 CSS
 st.markdown(
     """
     <style>
+    .player-card-container {
+        background-color: #24293a;
+        padding: 0.6rem 0.9rem;
+        border-radius: 1rem;
+        margin-bottom: 0.6rem;
+    }
     .player-card-name {
         color: #ffffff;
         font-weight: 700;
         font-size: 1.05rem;
+        margin-bottom: 0.1rem;
     }
-    .player-card-container {
-        background-color: #24293a;
-        padding: 0.75rem 1.0rem;
-        border-radius: 1.25rem;
+    .player-card-meta {
+        color: #e5e7eb;
+        font-size: 0.85rem;
     }
     .badge {
         display: inline-block;
-        padding: 0.1rem 0.6rem;
+        padding: 0.05rem 0.55rem;
         border-radius: 999px;
-        font-size: 0.75rem;
+        font-size: 0.7rem;
         border: 1px solid rgba(255, 255, 255, 0.4);
         margin-left: 0.25rem;
     }
@@ -191,6 +197,11 @@ st.markdown(
         border-color: #facc15;
         color: #facc15;
         background-color: rgba(250, 204, 21, 0.08);
+    }
+    .player-separator {
+        margin: 0.3rem 0 0.6rem 0;
+        border: none;
+        border-top: 1px solid rgba(148, 163, 184, 0.35);
     }
     </style>
     """,
@@ -285,7 +296,7 @@ st.caption("各プレイヤーのボックス内で、そのまま Re-buy を追
 if df.empty:
     st.info("まだプレイヤーが登録されていません。上のフォームから登録してください。")
 else:
-    for _, row in df.iterrows():
+    for i, (_, row) in enumerate(df.iterrows()):
         pid = row["player_id"]
         player_name = row["name"]
         team = row["team"]
@@ -298,75 +309,71 @@ else:
         )
 
         with st.container():
-            st.markdown(
-    f"<div style='font-size: 1.3rem; font-weight: 700; color: white;'>{row['name']}</div>",
-    unsafe_allow_html=True
-)
+            st.markdown("<div class='player-card-container'>", unsafe_allow_html=True)
 
-            top_cols = st.columns([3, 1, 1])
-            with top_cols[0]:
+            # 上段：名前＋バッジ
+            col_name, col_tags = st.columns([3, 2])
+            with col_name:
                 st.markdown(
-                    f"<span class='player-card-name'>{player_name}</span>",
+                    f"<div class='player-card-name'>{player_name}</div>",
                     unsafe_allow_html=True,
                 )
                 st.markdown(
-                    f"Buyin: {initial_buyin:,}　Rebuy合計: {rebuy_total:,}（{rebuy_times}回）　"
-                    f"最終Stack: {('未入力' if final_stack is None else f'{final_stack:,}')}",
+                    f"<div class='player-card-meta'>Buyin: {initial_buyin:,}　"
+                    f"Rebuy合計: {rebuy_total:,}（{rebuy_times}回）　"
+                    f"最終Stack: {('未入力' if final_stack is None else f'{final_stack:,}')}</div>",
+                    unsafe_allow_html=True,
                 )
-            with top_cols[1]:
+            with col_tags:
                 team_class = "badge-team-cse" if team == "CSE" else "badge-team-rc"
+                skill_class = "badge-skill-beginner" if skill == "初心者" else "badge-skill-expert"
                 st.markdown(
-                    f"<span class='badge {team_class}'>{team}</span>",
-                    unsafe_allow_html=True,
-                )
-            with top_cols[2]:
-                skill_class = (
-                    "badge-skill-beginner" if skill == "初心者" else "badge-skill-expert"
-                )
-                st.markdown(
-                    f"<span class='badge {skill_class}'>{skill}</span>",
+                    f"<div style='text-align: right;'>"
+                    f"<span class='badge {team_class}'>{team}</span>"
+                    f"<span class='badge {skill_class}'>{skill}</span>"
+                    f"</div>",
                     unsafe_allow_html=True,
                 )
 
-            st.markdown("</div>", unsafe_allow_html=True)
+            # 下段：Re-buy 入力（数値入力BOX＋ボタンのみ）
+            st.markdown("<div style='margin-top:0.4rem;'>", unsafe_allow_html=True)
+            col_input, col_btn = st.columns([3, 2])
+            key_base = f"rebuy_{pid}"
 
-        # Rebuy 入力行
-        col_rebuy_amount, col_minus, col_plus, col_button = st.columns([4, 1, 1, 3])
-        key_base = f"rebuy_{pid}"
+            with col_input:
+                rebuy_input = st.number_input(
+                    "",
+                    min_value=0,
+                    step=1000,
+                    value=0,
+                    key=f"{key_base}_amount",
+                    label_visibility="collapsed",
+                )
 
-        with col_rebuy_amount:
-            rebuy_input = st.number_input(
-                "",
-                min_value=0,
-                step=1000,
-                value=0,
-                key=f"{key_base}_amount",
-            )
-        with col_minus:
-            if st.button("－", key=f"{key_base}_minus"):
-                current = st.session_state[f"{key_base}_amount"]
-                st.session_state[f"{key_base}_amount"] = max(0, current - 1000)
-                st.rerun()
-        with col_plus:
-            if st.button("＋", key=f"{key_base}_plus"):
-                st.session_state[f"{key_base}_amount"] += 1000
-                st.rerun()
-        with col_button:
-            if st.button("＋ Rebuy", key=f"{key_base}_btn"):
-                if rebuy_input <= 0:
-                    st.warning("Re-buy額は正の数を入力してください。")
-                else:
-                    new_rebuy_total = rebuy_total + int(rebuy_input)
-                    new_rebuy_times = rebuy_times + 1
-                    update_player_row(
-                        pid,
-                        {
-                            "rebuy_total": new_rebuy_total,
-                            "rebuy_times": new_rebuy_times,
-                        },
-                    )
-                    st.success(f"{player_name} に Re-buy {rebuy_input:,} を追加しました。")
-                    st.rerun()
+            with col_btn:
+                if st.button("＋ Rebuy", key=f"{key_base}_btn"):
+                    if rebuy_input <= 0:
+                        st.warning("Re-buy額は正の数を入力してください。")
+                    else:
+                        new_rebuy_total = rebuy_total + int(rebuy_input)
+                        new_rebuy_times = rebuy_times + 1
+                        update_player_row(
+                            pid,
+                            {
+                                "rebuy_total": new_rebuy_total,
+                                "rebuy_times": new_rebuy_times,
+                            },
+                        )
+                        st.success(f"{player_name} に Re-buy {rebuy_input:,} を追加しました。")
+                        st.rerun()
+
+            st.markdown("</div>", unsafe_allow_html=True)  # inner div end
+
+            st.markdown("</div>", unsafe_allow_html=True)  # card-container end
+
+        # プレイヤー間の区切り線
+        if i < len(df) - 1:
+            st.markdown("<hr class='player-separator' />", unsafe_allow_html=True)
 
     st.markdown("---")
 
@@ -422,6 +429,7 @@ else:
                 value=stack_value_default,
                 step=1000,
                 key=f"final_stack_{pid}",
+                label_visibility="collapsed",
             )
 
         with col_button:
