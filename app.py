@@ -138,7 +138,9 @@ def update_player_row(player_id: str, updates: dict):
 
     load_players_df.clear()
 
+
 def reset_players_sheet():
+    """players シートを初期状態にリセット"""
     ws = get_worksheet()
     ws.clear()
     ws.append_row(
@@ -588,6 +590,10 @@ else:
             ),
             use_container_width=True,
         )
+
+# --------------------------
+# 6. データリセット
+# --------------------------
 
 st.markdown("---")
 st.subheader(⚠️ データリセット")
