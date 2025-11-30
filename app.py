@@ -7,25 +7,14 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 
-# ==============================
-# 設定
-# ==============================
+# --------------------------
+# Google Sheets 接続まわり
+# --------------------------
 
-SHEET_NAME = "players"  # Google Sheets 内のシート名
-
-
-# ==============================
-# Google Sheets 接続
-# ==============================
 
 @st.cache_resource
 def get_gspread_client():
-    """
-    Streamlit Cloud の st.secrets に格納したサービスアカウント情報から
-    gspread クライアントを生成する。
-    """
     credentials_info = st.secrets["gcp_service_account"]
-
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
@@ -37,592 +26,538 @@ def get_gspread_client():
 
 @st.cache_resource
 def get_worksheet():
-    """
-    Google Sheets の players シート（ワークシート）を取得する。
-    st.secrets["spreadsheet_id"] に対象スプレッドシートIDを入れておく想定。
-    """
     client = get_gspread_client()
-    spreadsheet = client.open_by_key(st.secrets["spreadsheet_id"])
+    spreadsheet_id = st.secrets["spreadsheet_id"]
+    sh = client.open_by_key(spreadsheet_id)
+
     try:
-        ws = spreadsheet.worksheet(SHEET_NAME)
+        ws = sh.worksheet("players")
     except gspread.WorksheetNotFound:
-        # 初回用：シートがなければ作成してヘッダ行をセット
-        ws = spreadsheet.add_worksheet(title=SHEET_NAME, rows=200, cols=10)
-        ws.append_row([
-            "player_id",
-            "name",
-            "team",
-            "skill",
-            "initial_buyin",
-            "rebuy_total",
-            "rebuy_count",
-            "final_stack",
-            "created_at",
-            "updated_at",
-        ])
-    return ws
-
-
-def load_players_df():
-    """
-    players シートを DataFrame として読み込む。
-    空シートの場合は空の DataFrame を返す。
-    """
-    ws = get_worksheet()
-    rows = ws.get_all_values()
-    if not rows or len(rows) == 1:
-        columns = [
-            "player_id",
-            "name",
-            "team",
-            "skill",
-            "initial_buyin",
-            "rebuy_total",
-            "rebuy_count",
-            "final_stack",
-            "created_at",
-            "updated_at",
-        ]
-        return pd.DataFrame(columns=columns)
-
-    header = rows[0]
-    data = rows[1:]
-    df = pd.DataFrame(data, columns=header)
-
-    # 数値列を適切に変換
-    for col in ["initial_buyin", "rebuy_total", "rebuy_count", "final_stack"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    # created_at で登録順を安定させる（なければそのまま）
-    if "created_at" in df.columns:
-        df = df.sort_values("created_at", kind="mergesort")
-
-    return df
-
-
-def write_players_df(df: pd.DataFrame):
-    """
-    DataFrame 全体を players シートに書き戻す（上書き）。
-    行数がそこまで多くない前提なので、シンプルに全書き換え方式にする。
-    """
-    ws = get_worksheet()
-    ws.clear()
-    ws.append_row(list(df.columns))
-    if len(df) > 0:
-        rows = df.astype(str).values.tolist()
-        ws.append_rows(rows)
-
-
-# ==============================
-# 集計ロジック
-# ==============================
-
-def compute_profit_and_adjusted(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    DataFrame に profit（収支）と adjusted_profit（傾斜後収支）列を追加して返す。
-    収支 = final_stack - (initial_buyin + rebuy_total)
-    傾斜は収支に対して実施。
-    """
-    df = df.copy()
-
-    df["total_buyin"] = df["initial_buyin"].fillna(0) + df["rebuy_total"].fillna(0)
-    df["profit"] = df["final_stack"] - df["total_buyin"]
-
-    def adjust_profit(row):
-        profit = row["profit"]
-        skill = row["skill"]  # "experienced" or "beginner"
-        if pd.isna(profit):
-            return None
-
-        if profit >= 0:
-            if skill == "experienced":
-                val = profit / 2
-            else:  # beginner
-                val = profit * 2
-        else:
-            if skill == "experienced":
-                val = profit * 2
-            else:
-                val = profit / 2
-
-        return round(val)
-
-    df["adjusted_profit"] = df.apply(adjust_profit, axis=1)
-
-    return df
-
-
-def sort_for_ranking(df: pd.DataFrame, key: str) -> pd.DataFrame:
-    """
-    ランキング用のソート。
-    - key の降順
-    - 同値の場合は登録順を維持するため安定ソート。
-    """
-    df = df.copy()
-    df = df.reset_index(drop=False).rename(columns={"index": "_orig_index"})
-    df = df.sort_values(
-        by=[key, "_orig_index"],
-        ascending=[False, True],
-        kind="mergesort",
-    )
-    return df
-
-
-# ==============================
-# スタイル（CSS）
-# ==============================
-
-def inject_css():
-    st.markdown(
-        """
-        <style>
-        /* 全体背景とフォント色 */
-        .main {
-            background: radial-gradient(circle at top left, #1f2933, #020617);
-            color: #e5e7eb;
-        }
-        /* タイトル */
-        .app-title {
-            font-size: 1.6rem;
-            font-weight: 700;
-            padding: 0.5rem 0;
-        }
-        .app-subtitle {
-            font-size: 0.9rem;
-            color: #9ca3af;
-            margin-bottom: 0.5rem;
-        }
-        /* セクションヘッダ */
-        .section-header {
-            font-size: 1.1rem;
-            font-weight: 600;
-            margin-top: 1rem;
-            margin-bottom: 0.2rem;
-        }
-        .section-caption {
-            font-size: 0.8rem;
-            color: #9ca3af;
-            margin-bottom: 0.6rem;
-        }
-        /* プレイヤーカード */
-        .player-card {
-            border-radius: 12px;
-            padding: 0.7rem 0.8rem;
-            margin-bottom: 0.3rem;
-            background: rgba(15, 23, 42, 0.9);
-            border: 1px solid rgba(148, 163, 184, 0.35);
-        }
-        .player-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 0.25rem;
-        }
-        .player-name {
-            font-weight: 600;
-            font-size: 0.95rem;
-        }
-        .badge-group {
-            display: flex;
-            gap: 0.25rem;
-        }
-        .badge {
-            padding: 0.15rem 0.5rem;
-            border-radius: 999px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            display: inline-block;
-        }
-        .badge-team-cse {
-            background: rgba(56, 189, 248, 0.15);
-            color: #38bdf8;
-            border: 1px solid rgba(56, 189, 248, 0.6);
-        }
-        .badge-team-rc {
-            background: rgba(249, 115, 22, 0.15);
-            color: #fb923c;
-            border: 1px solid rgba(249, 115, 22, 0.6);
-        }
-        .badge-skill-beginner {
-            background: rgba(22, 163, 74, 0.15);
-            color: #4ade80;
-            border: 1px solid rgba(22, 163, 74, 0.6);
-        }
-        .badge-skill-experienced {
-            background: rgba(239, 68, 68, 0.12);
-            color: #fca5a5;
-            border: 1px solid rgba(239, 68, 68, 0.6);
-        }
-        .player-meta {
-            font-size: 0.8rem;
-            color: #cbd5f5;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.7rem;
-            margin-bottom: 0.4rem;
-        }
-        .player-meta span {
-            white-space: nowrap;
-        }
-        .meta-label {
-            color: #9ca3af;
-        }
-        /* ボタン（全体のトーン統一） */
-        button[kind="primary"] {
-            background: linear-gradient(90deg, #22c55e, #16a34a) !important;
-            color: white !important;
-            border-radius: 999px !important;
-            border: none !important;
-        }
-        button[kind="secondary"] {
-            border-radius: 999px !important;
-        }
-        /* DataFrame テーブルの文字少し小さめに */
-        .stDataFrame table {
-            font-size: 0.8rem !important;
-        }
-        /* 警告・インフォのカード少しだけ透明感 */
-        .stAlert > div {
-            background-color: rgba(15, 23, 42, 0.95) !important;
-            border-radius: 12px !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-# ==============================
-# UI
-# ==============================
-
-def main():
-    st.set_page_config(
-        page_title="ポーカー大会 収支集計アプリ",
-        layout="centered",
-    )
-
-    inject_css()
-
-    # ヘッダ
-    st.markdown(
-        """
-        <div class="app-title">🃏 ポーカー大会 収支集計アプリ</div>
-        <div class="app-subtitle">スマホ1台で、バイイン・Rebuy・最終スタックから収支と傾斜後収支を自動で集計。</div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # データ読み込み
-    df = load_players_df()
-
-    # =========================
-    # 1. プレイヤー登録
-    # =========================
-    st.markdown(
-        '<div class="section-header">1. プレイヤー登録</div>'
-        '<div class="section-caption">ゲーム開始前に、参加者の基本情報と初期バイインだけ登録します。</div>',
-        unsafe_allow_html=True,
-    )
-
-    with st.form("add_player_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        name = col1.text_input("プレイヤー名", placeholder="例）田中")
-        team = col2.selectbox("チーム", ["CSE", "RC"])
-
-        col3, col4 = st.columns(2)
-        skill_jp = col3.selectbox("スキル区分", ["初心者", "経験者"])
-        initial_buyin = col4.number_input(
-            "初期バイイン額",
-            min_value=0,
-            step=100,
-            help="最初に参加するときのバイイン額を入力してください。",
-        )
-
-        submitted = st.form_submit_button("＋ プレイヤーを登録する")
-
-        if submitted:
-            if not name:
-                st.error("プレイヤー名を入力してください。")
-            else:
-                skill = "beginner" if skill_jp == "初心者" else "experienced"
-                now = datetime.now().isoformat(timespec="seconds")
-                new_row = {
-                    "player_id": str(uuid.uuid4()),
-                    "name": name,
-                    "team": team,
-                    "skill": skill,
-                    "initial_buyin": int(initial_buyin),
-                    "rebuy_total": 0,
-                    "rebuy_count": 0,
-                    "final_stack": None,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                write_players_df(df)
-                st.success(f"{name} を登録しました。")
-                st.rerun()
-
-    # 簡単なサマリー
-    with st.container():
-        colA, colB, colC = st.columns(3)
-        colA.metric("参加人数", f"{len(df)} 人")
-        total_buyin_display = int(df["initial_buyin"].fillna(0).sum()) if len(df) else 0
-        colB.metric("初期バイイン合計", f"{total_buyin_display:,}")
-        total_rebuy_display = int(df["rebuy_total"].fillna(0).sum()) if len(df) else 0
-        colC.metric("Rebuy 合計", f"{total_rebuy_display:,}")
-
-    st.markdown("---")
-
-    # =========================
-    # 2. プレイヤー一覧・途中経過（カード＋行ごとの Rebuy 入力）
-    # =========================
-    st.markdown(
-        '<div class="section-header">2. プレイヤー一覧・途中経過</div>'
-        '<div class="section-caption">各プレイヤーのカード内で、そのまま Rebuy を追加できます。</div>',
-        unsafe_allow_html=True,
-    )
-
-    if len(df) == 0:
-        st.info("まだプレイヤーが登録されていません。上のフォームから登録してください。")
-    else:
-        for _, row in df.iterrows():
-            team = row["team"]
-            skill = row["skill"]  # "beginner" / "experienced"
-            buyin = row["initial_buyin"] if not pd.isna(row["initial_buyin"]) else 0
-            rebuy_total = row["rebuy_total"] if not pd.isna(row["rebuy_total"]) else 0
-            rebuy_count = int(row["rebuy_count"]) if not pd.isna(row["rebuy_count"]) else 0
-            final_stack = row["final_stack"]
-
-            team_badge_cls = "badge-team-cse" if team == "CSE" else "badge-team-rc"
-            skill_badge_cls = (
-                "badge-skill-beginner" if skill == "beginner" else "badge-skill-experienced"
-            )
-            skill_label = "初心者" if skill == "beginner" else "経験者"
-
-            final_stack_str = (
-                f"{int(final_stack):,}"
-                if not pd.isna(final_stack)
-                else "未入力"
-            )
-
-            card_html = f"""
-            <div class="player-card">
-                <div class="player-header">
-                    <div class="player-name">{row['name']}</div>
-                    <div class="badge-group">
-                        <span class="badge {team_badge_cls}">{team}</span>
-                        <span class="badge {skill_badge_cls}">{skill_label}</span>
-                    </div>
-                </div>
-                <div class="player-meta">
-                    <span><span class="meta-label">Buyin:</span> {int(buyin):,}</span>
-                    <span><span class="meta-label">Rebuy合計:</span> {int(rebuy_total):,}（{rebuy_count}回）</span>
-                    <span><span class="meta-label">最終Stack:</span> {final_stack_str}</span>
-                </div>
-            </div>
-            """
-            st.markdown(card_html, unsafe_allow_html=True)
-
-            # 行ごとの Rebuy 入力（A案）
-            col_r1, col_r2 = st.columns([3, 1])
-            rebuy_amount = col_r1.number_input(
-                f"Rebuy金額（{row['name']}）",
-                min_value=0,
-                step=100,
-                key=f"rebuy_amount_{row['player_id']}",
-                label_visibility="collapsed",
-            )
-            with col_r2:
-                if st.button("＋ Rebuy", key=f"rebuy_button_{row['player_id']}"):
-                    if rebuy_amount <= 0:
-                        st.error("Rebuy金額は 0 より大きい値を入力してください。")
-                    else:
-                        idx = df.index[df["player_id"] == row["player_id"]][0]
-                        df.loc[idx, "rebuy_total"] = (df.loc[idx, "rebuy_total"] or 0) + int(
-                            rebuy_amount
-                        )
-                        df.loc[idx, "rebuy_count"] = (df.loc[idx, "rebuy_count"] or 0) + 1
-                        df.loc[idx, "updated_at"] = datetime.now().isoformat(timespec="seconds")
-                        write_players_df(df)
-                        st.success(f"{row['name']} に Rebuy {int(rebuy_amount):,} を追加しました。")
-                        st.rerun()
-
-    st.markdown("---")
-
-    # =========================
-    # 3. 最終スタック登録
-    # =========================
-    st.markdown(
-        '<div class="section-header">3. 最終スタック登録</div>'
-        '<div class="section-caption">ゲームから離脱した人は、その時点のスタックを登録します。（マイナスも可）</div>',
-        unsafe_allow_html=True,
-    )
-
-    if len(df) == 0:
-        st.info("プレイヤーがいないため、最終スタックは登録できません。")
-    else:
-        with st.form("final_stack_form", clear_on_submit=True):
-            col1, col2 = st.columns([2, 1])
-            player_names = df["name"].tolist()
-            selected_name_fs = col1.selectbox("最終スタックを登録するプレイヤー", player_names)
-            final_stack_val = col2.number_input(
-                "最終Stack",
-                step=100,
-                format="%d",
-                help="離脱時点のスタックを入力してください。マイナスも入力可能です。",
-            )
-            final_submit = st.form_submit_button("💾 最終Stackを保存")
-
-            if final_submit:
-                idx = df.index[df["name"] == selected_name_fs][0]
-                df.loc[idx, "final_stack"] = int(final_stack_val)
-                df.loc[idx, "updated_at"] = datetime.now().isoformat(timespec="seconds")
-                write_players_df(df)
-                st.success(f"{selected_name_fs} の最終Stackを {int(final_stack_val):,} に更新しました。")
-                st.rerun()
-
-    st.markdown("---")
-
-    # =========================
-    # 4. 集計
-    # =========================
-    st.markdown(
-        '<div class="section-header">4. 集計・ランキング</div>'
-        '<div class="section-caption">全員の最終スタックが入ったら、収支と傾斜後収支のランキングを出します。</div>',
-        unsafe_allow_html=True,
-    )
-
-    if len(df) == 0:
-        st.info("プレイヤーがいないため、集計は実行できません。")
-    else:
-        if df["final_stack"].isna().any():
-            st.warning("⚠ 一部プレイヤーの最終Stackが未入力です。そのプレイヤーの収支は計算されません。")
-
-        if st.button("▶ 集計を実行する"):
-            df_calc = compute_profit_and_adjusted(df)
-
-            # 個人別 収支ランキング
-            st.markdown("#### 個人別 収支ランキング")
-            df_profit_rank = sort_for_ranking(df_calc.dropna(subset=["profit"]), "profit")
-            if len(df_profit_rank) == 0:
-                st.info("収支を計算できるプレイヤーがいません。")
-            else:
-                tmp = df_profit_rank.copy()
-                tmp["Skill"] = tmp["skill"].map({"beginner": "初心者", "experienced": "経験者"})
-                tmp["収支表示"] = tmp["profit"].apply(
-                    lambda x: f"🟢 +{int(x):,}" if x >= 0 else f"🔴 {int(x):,}"
-                )
-                tmp["Team"] = tmp["team"]
-                tmp["Name"] = tmp["name"]
-                tmp["Buyin"] = tmp["initial_buyin"].astype("Int64")
-                tmp["Rebuy合計"] = tmp["rebuy_total"].astype("Int64")
-                tmp["Rebuy回数"] = tmp["rebuy_count"].astype("Int64")
-                tmp["最終Stack"] = tmp["final_stack"].astype("Int64")
-
-                display_cols = [
-                    "Name",
-                    "Team",
-                    "Skill",
-                    "Buyin",
-                    "Rebuy合計",
-                    "Rebuy回数",
-                    "最終Stack",
-                    "収支表示",
-                ]
-                tmp = tmp[display_cols]
-                tmp.insert(0, "順位", range(1, len(tmp) + 1))
-                st.dataframe(tmp, use_container_width=True, hide_index=True)
-
-            # 個人別 傾斜後収支ランキング
-            st.markdown("#### 個人別 傾斜後収支ランキング")
-            df_adj_rank = sort_for_ranking(df_calc.dropna(subset=["adjusted_profit"]), "adjusted_profit")
-            if len(df_adj_rank) == 0:
-                st.info("傾斜後収支を計算できるプレイヤーがいません。")
-            else:
-                tmp2 = df_adj_rank.copy()
-                tmp2["Skill"] = tmp2["skill"].map({"beginner": "初心者", "experienced": "経験者"})
-                tmp2["収支表示"] = tmp2["profit"].apply(
-                    lambda x: f"🟢 +{int(x):,}" if x >= 0 else f"🔴 {int(x):,}"
-                )
-                tmp2["傾斜後収支表示"] = tmp2["adjusted_profit"].apply(
-                    lambda x: f"🟢 +{int(x):,}" if x >= 0 else f"🔴 {int(x):,}"
-                )
-
-                tmp2["Name"] = tmp2["name"]
-                tmp2["Team"] = tmp2["team"]
-
-                display_cols2 = [
-                    "Name",
-                    "Team",
-                    "Skill",
-                    "収支表示",
-                    "傾斜後収支表示",
-                ]
-                tmp2 = tmp2[display_cols2]
-                tmp2.insert(0, "順位", range(1, len(tmp2) + 1))
-                st.dataframe(tmp2, use_container_width=True, hide_index=True)
-
-            # チーム別ランキング
-            st.markdown("#### チーム別 収支・傾斜後収支")
-
-            if "profit" in df_calc.columns and "adjusted_profit" in df_calc.columns:
-                team_agg = df_calc.groupby("team").agg(
-                    profit_sum=("profit", "sum"),
-                    adjusted_profit_sum=("adjusted_profit", "sum"),
-                ).reset_index()
-
-                team_agg = team_agg.sort_values(
-                    by=["profit_sum", "team"],
-                    ascending=[False, True],
-                )
-
-                team_agg["収支表示"] = team_agg["profit_sum"].apply(
-                    lambda x: f"🟢 +{int(x):,}" if x >= 0 else f"🔴 {int(x):,}"
-                )
-                team_agg["傾斜後収支表示"] = team_agg["adjusted_profit_sum"].apply(
-                    lambda x: f"🟢 +{int(x):,}" if x >= 0 else f"🔴 {int(x):,}"
-                )
-
-                team_agg = team_agg.rename(columns={"team": "Team"})
-                team_agg_display = team_agg[["Team", "収支表示", "傾斜後収支表示"]]
-                team_agg_display.insert(0, "順位", range(1, len(team_agg_display) + 1))
-                st.dataframe(team_agg_display, use_container_width=True, hide_index=True)
-            else:
-                st.info("チーム別の集計に必要なデータが不足しています。")
-
-    st.markdown("---")
-
-    # =========================
-    # 5. 全データリセット
-    # =========================
-    st.markdown(
-        '<div class="section-header">5. 全データリセット</div>'
-        '<div class="section-caption">大会が完全に終了したら、次の大会に向けてデータをクリアします。</div>',
-        unsafe_allow_html=True,
-    )
-
-    if st.button("🗑 すべてリセットする"):
-        empty_df = pd.DataFrame(
-            columns=[
+        ws = sh.add_worksheet(title="players", rows=1000, cols=20)
+        ws.append_row(
+            [
                 "player_id",
                 "name",
                 "team",
                 "skill",
                 "initial_buyin",
                 "rebuy_total",
-                "rebuy_count",
+                "rebuy_times",
                 "final_stack",
                 "created_at",
                 "updated_at",
             ]
         )
-        write_players_df(empty_df)
-        st.success("全データをリセットしました。")
-        st.rerun()
+    return ws
 
 
-if __name__ == "__main__":
-    main()
+def _empty_players_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "player_id",
+            "name",
+            "team",
+            "skill",
+            "initial_buyin",
+            "rebuy_total",
+            "rebuy_times",
+            "final_stack",
+            "created_at",
+            "updated_at",
+        ]
+    )
+
+
+@st.cache_data(ttl=10, show_spinner=False)
+def load_players_df() -> pd.DataFrame:
+    ws = get_worksheet()
+    values = ws.get_all_values()
+    if not values or len(values) == 1:
+        return _empty_players_df()
+
+    header = values[0]
+    records = values[1:]
+    df = pd.DataFrame(records, columns=header)
+
+    # 型変換
+    numeric_cols = ["initial_buyin", "rebuy_total", "rebuy_times", "final_stack"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    return df
+
+
+def append_player_row(row: dict):
+    ws = get_worksheet()
+    now = datetime.utcnow().isoformat()
+    ws.append_row(
+        [
+            row["player_id"],
+            row["name"],
+            row["team"],
+            row["skill"],
+            int(row["initial_buyin"]),
+            int(row["rebuy_total"]),
+            int(row["rebuy_times"]),
+            "" if row["final_stack"] is None else int(row["final_stack"]),
+            now,
+            now,
+        ]
+    )
+    load_players_df.clear()
+
+
+def update_player_row(player_id: str, updates: dict):
+    ws = get_worksheet()
+    df = load_players_df()
+
+    if df.empty:
+        return
+
+    if player_id not in df["player_id"].values:
+        return
+
+    row_idx = df.index[df["player_id"] == player_id][0]
+    sheet_row = row_idx + 2  # 1-based & header
+
+    for col_name, new_value in updates.items():
+        if col_name not in df.columns:
+            continue
+        col_idx = df.columns.get_loc(col_name) + 1
+        if col_name in ["initial_buyin", "rebuy_total", "rebuy_times", "final_stack"]:
+            if new_value is None or new_value == "":
+                ws.update_cell(sheet_row, col_idx, "")
+            else:
+                ws.update_cell(sheet_row, col_idx, int(new_value))
+        else:
+            ws.update_cell(sheet_row, col_idx, str(new_value))
+
+    ts_col = df.columns.get_loc("updated_at") + 1
+    ws.update_cell(sheet_row, ts_col, datetime.utcnow().isoformat())
+
+    load_players_df.clear()
+
+
+# --------------------------
+# Streamlit UI / ロジック
+# --------------------------
+
+
+st.set_page_config(
+    page_title="ポーカー大会 収支集計アプリ",
+    page_icon="🃏",
+    layout="centered",
+)
+
+# プレイヤー名の可読性向上 CSS
+st.markdown(
+    """
+    <style>
+    .player-card-name {
+        color: #ffffff;
+        font-weight: 700;
+        font-size: 1.05rem;
+    }
+    .player-card-container {
+        background-color: #24293a;
+        padding: 0.75rem 1.0rem;
+        border-radius: 1.25rem;
+    }
+    .badge {
+        display: inline-block;
+        padding: 0.1rem 0.6rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        border: 1px solid rgba(255, 255, 255, 0.4);
+        margin-left: 0.25rem;
+    }
+    .badge-team-cse {
+        border-color: #3b82f6;
+        color: #3b82f6;
+        background-color: rgba(59, 130, 246, 0.08);
+    }
+    .badge-team-rc {
+        border-color: #f97316;
+        color: #f97316;
+        background-color: rgba(249, 115, 22, 0.08);
+    }
+    .badge-skill-beginner {
+        border-color: #22c55e;
+        color: #22c55e;
+        background-color: rgba(34, 197, 94, 0.08);
+    }
+    .badge-skill-expert {
+        border-color: #facc15;
+        color: #facc15;
+        background-color: rgba(250, 204, 21, 0.08);
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.title("ポーカー大会 収支集計アプリ")
+st.caption("Buy-in（バイイン）、Re-buy（リバイ）を登録し、収支を自動で集計。")
+
+df = load_players_df()
+
+# --------------------------
+# ルール表示
+# --------------------------
+
+st.markdown(
+    """
+**ルール：**
+
+- 個人順位、チーム順位（CSE / RC）を集計  
+- handicap：経験者は最終持ち点を半分（マイナスの場合は2倍）、初心者は最終持ち点を2倍（マイナスの場合は半分）に  
+- 素点収支集計・handicap収支集計の双方を実施  
+"""
+)
+
+# --------------------------
+# 1. プレイヤー登録
+# --------------------------
+
+st.header("1. プレイヤー登録")
+st.caption("ゲーム開始前に、参加者の基本情報と初期バイインだけ登録します。")
+
+with st.form("player_registration"):
+    col1, col2 = st.columns(2)
+    with col1:
+        name = st.text_input("プレイヤー名", placeholder="例）田中")
+    with col2:
+        team = st.selectbox("チーム", options=["CSE", "RC"])
+
+    col3, col4 = st.columns(2)
+    with col3:
+        skill = st.selectbox("スキル区分", options=["初心者", "経験者"])
+    with col4:
+        initial_buyin = st.number_input(
+            "初期バイイン額",
+            min_value=0,
+            step=1000,
+            value=0,
+            help="ゲーム開始時に投入するBuy-in額を入力してください。",
+        )
+
+    submitted = st.form_submit_button("＋ プレイヤーを登録する")
+
+    if submitted:
+        if not name.strip():
+            st.error("プレイヤー名を入力してください。")
+        else:
+            new_player = {
+                "player_id": str(uuid.uuid4()),
+                "name": name.strip(),
+                "team": team,
+                "skill": skill,
+                "initial_buyin": int(initial_buyin),
+                "rebuy_total": 0,
+                "rebuy_times": 0,
+                "final_stack": None,
+            }
+            append_player_row(new_player)
+            st.success(f"{name} を登録しました。")
+            st.rerun()
+
+# 参加人数サマリー
+df = load_players_df()
+num_players = len(df)
+num_cse = int((df["team"] == "CSE").sum()) if not df.empty else 0
+num_rc = int((df["team"] == "RC").sum()) if not df.empty else 0
+
+col1, col2, col3 = st.columns(3)
+col1.metric("参加人数", f"{num_players} 人")
+col2.metric("CSE人数", f"{num_cse} 人")
+col3.metric("RC人数", f"{num_rc} 人")
+
+st.markdown("---")
+
+# --------------------------
+# 2. プレイヤー一覧・途中経過
+# --------------------------
+
+st.header("2. プレイヤー一覧・途中経過")
+st.caption("各プレイヤーのボックス内で、そのまま Re-buy を追加できます。")
+
+if df.empty:
+    st.info("まだプレイヤーが登録されていません。上のフォームから登録してください。")
+else:
+    for _, row in df.iterrows():
+        pid = row["player_id"]
+        player_name = row["name"]
+        team = row["team"]
+        skill = row["skill"]
+        initial_buyin = int(row["initial_buyin"]) if not pd.isna(row["initial_buyin"]) else 0
+        rebuy_total = int(row["rebuy_total"]) if not pd.isna(row["rebuy_total"]) else 0
+        rebuy_times = int(row["rebuy_times"]) if not pd.isna(row["rebuy_times"]) else 0
+        final_stack = (
+            None if pd.isna(row["final_stack"]) or row["final_stack"] == "" else int(row["final_stack"])
+        )
+
+        with st.container():
+            st.markdown(
+                "<div class='player-card-container'>",
+                unsafe_allow_html=True,
+            )
+
+            top_cols = st.columns([3, 1, 1])
+            with top_cols[0]:
+                st.markdown(
+                    f"<span class='player-card-name'>{player_name}</span>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    f"Buyin: {initial_buyin:,}　Rebuy合計: {rebuy_total:,}（{rebuy_times}回）　"
+                    f"最終Stack: {('未入力' if final_stack is None else f'{final_stack:,}')}",
+                )
+            with top_cols[1]:
+                team_class = "badge-team-cse" if team == "CSE" else "badge-team-rc"
+                st.markdown(
+                    f"<span class='badge {team_class}'>{team}</span>",
+                    unsafe_allow_html=True,
+                )
+            with top_cols[2]:
+                skill_class = (
+                    "badge-skill-beginner" if skill == "初心者" else "badge-skill-expert"
+                )
+                st.markdown(
+                    f"<span class='badge {skill_class}'>{skill}</span>",
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        # Rebuy 入力行
+        col_rebuy_amount, col_minus, col_plus, col_button = st.columns([4, 1, 1, 3])
+        key_base = f"rebuy_{pid}"
+
+        with col_rebuy_amount:
+            rebuy_input = st.number_input(
+                "",
+                min_value=0,
+                step=1000,
+                value=0,
+                key=f"{key_base}_amount",
+            )
+        with col_minus:
+            if st.button("－", key=f"{key_base}_minus"):
+                current = st.session_state[f"{key_base}_amount"]
+                st.session_state[f"{key_base}_amount"] = max(0, current - 1000)
+                st.rerun()
+        with col_plus:
+            if st.button("＋", key=f"{key_base}_plus"):
+                st.session_state[f"{key_base}_amount"] += 1000
+                st.rerun()
+        with col_button:
+            if st.button("＋ Rebuy", key=f"{key_base}_btn"):
+                if rebuy_input <= 0:
+                    st.warning("Re-buy額は正の数を入力してください。")
+                else:
+                    new_rebuy_total = rebuy_total + int(rebuy_input)
+                    new_rebuy_times = rebuy_times + 1
+                    update_player_row(
+                        pid,
+                        {
+                            "rebuy_total": new_rebuy_total,
+                            "rebuy_times": new_rebuy_times,
+                        },
+                    )
+                    st.success(f"{player_name} に Re-buy {rebuy_input:,} を追加しました。")
+                    st.rerun()
+
+    st.markdown("---")
+
+# --------------------------
+# 3. 途中経過（チーム別 Re-buy 集計）
+# --------------------------
+
+st.header("3. 途中経過")
+st.caption("チームごとの Re-buy 額の途中経過を表示します。")
+
+if df.empty:
+    st.info("まだプレイヤーがいないため、途中経過は表示できません。")
+else:
+    df_rebuy = df.copy()
+    df_rebuy["rebuy_total"] = pd.to_numeric(df_rebuy["rebuy_total"], errors="coerce").fillna(0)
+
+    cse_rebuy = int(df_rebuy.loc[df_rebuy["team"] == "CSE", "rebuy_total"].sum())
+    rc_rebuy = int(df_rebuy.loc[df_rebuy["team"] == "RC", "rebuy_total"].sum())
+    total_rebuy = cse_rebuy + rc_rebuy
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("CSE Re-buy額合計", f"{cse_rebuy:,}")
+    col2.metric("RC Re-buy額合計", f"{rc_rebuy:,}")
+    col3.metric("Re-buy額合計（全体）", f"{total_rebuy:,}")
+
+st.markdown("---")
+
+# --------------------------
+# 4. 最終スタック登録
+# --------------------------
+
+st.header("4. 最終スタック登録")
+st.caption("ゲームから離脱した人は、その時点のスタックを登録してください。（0の場合は0を入力）")
+
+if df.empty:
+    st.info("プレイヤーがいないため、最終スタックは登録できません。")
+else:
+    for _, row in df.iterrows():
+        pid = row["player_id"]
+        player_name = row["name"]
+        final_stack = (
+            None if pd.isna(row["final_stack"]) or row["final_stack"] == "" else int(row["final_stack"])
+        )
+
+        col_label, col_input, col_button = st.columns([3, 2, 2])
+        with col_label:
+            st.write(f"**{player_name}** の最終Stack")
+
+        with col_input:
+            stack_value_default = 0 if final_stack is None else final_stack
+            new_stack = st.number_input(
+                "",
+                value=stack_value_default,
+                step=1000,
+                key=f"final_stack_{pid}",
+            )
+
+        with col_button:
+            if st.button("最終Stackを登録", key=f"final_stack_btn_{pid}"):
+                update_player_row(pid, {"final_stack": int(new_stack)})
+                st.success(f"{player_name} の最終Stackを {int(new_stack):,} で登録しました。")
+                st.rerun()
+
+st.markdown("---")
+
+# --------------------------
+# 5. 集計・ランキング
+# --------------------------
+
+st.header("5. 集計・ランキング")
+st.caption("全員の最終スタックが入ったら、素点収支とhandicap収支のランキングを出力します。")
+
+if df.empty:
+    st.info("プレイヤーがいないため、集計は実行できません。")
+else:
+    # 最終スタックが入っているプレイヤーのみ対象
+    df_rank = df.copy()
+    df_rank["final_stack"] = pd.to_numeric(df_rank["final_stack"], errors="coerce")
+    df_rank["initial_buyin"] = pd.to_numeric(df_rank["initial_buyin"], errors="coerce").fillna(0)
+    df_rank["rebuy_total"] = pd.to_numeric(df_rank["rebuy_total"], errors="coerce").fillna(0)
+
+    df_rank = df_rank[~df_rank["final_stack"].isna()].copy()
+
+    if df_rank.empty:
+        st.info("最終Stackが未入力のプレイヤーがいるため、ランキングを計算できません。")
+    else:
+        # 素点収支 = 最終Stack - (初期Buy-in + Re-buy総額)
+        df_rank["profit"] = df_rank["final_stack"] - (
+            df_rank["initial_buyin"] + df_rank["rebuy_total"]
+        )
+
+        # handicap収支
+        def calc_handicap(row):
+            profit = row["profit"]
+            if pd.isna(profit):
+                return None
+
+            if profit >= 0:
+                if row["skill"] == "初心者":
+                    val = profit * 2
+                else:  # 経験者
+                    val = profit * 0.5
+            else:  # マイナス
+                if row["skill"] == "初心者":
+                    val = profit * 0.5
+                else:
+                    val = profit * 2
+
+            return int(round(val))
+
+        df_rank["handicap_profit"] = df_rank.apply(calc_handicap, axis=1)
+
+        # 表示用列
+        display_cols = [
+            "name",
+            "team",
+            "skill",
+            "initial_buyin",
+            "rebuy_total",
+            "final_stack",
+            "profit",
+            "handicap_profit",
+        ]
+
+        # 個人ランキング（素点収支）
+        st.subheader("個人ランキング（素点収支）")
+        df_individual = df_rank.sort_values(
+            by=["profit", "created_at"], ascending=[False, True]
+        ).reset_index(drop=True)
+        df_individual.index = df_individual.index + 1
+        st.dataframe(
+            df_individual[display_cols].rename(
+                columns={
+                    "name": "プレイヤー",
+                    "team": "チーム",
+                    "skill": "スキル",
+                    "initial_buyin": "初期Buy-in",
+                    "rebuy_total": "Re-buy合計",
+                    "final_stack": "最終Stack",
+                    "profit": "素点収支",
+                    "handicap_profit": "handicap収支",
+                }
+            ),
+            use_container_width=True,
+        )
+
+        # 個人ランキング（handicap収支）
+        st.subheader("個人ランキング（handicap収支）")
+        df_individual_h = df_rank.sort_values(
+            by=["handicap_profit", "created_at"], ascending=[False, True]
+        ).reset_index(drop=True)
+        df_individual_h.index = df_individual_h.index + 1
+        st.dataframe(
+            df_individual_h[display_cols].rename(
+                columns={
+                    "name": "プレイヤー",
+                    "team": "チーム",
+                    "skill": "スキル",
+                    "initial_buyin": "初期Buy-in",
+                    "rebuy_total": "Re-buy合計",
+                    "final_stack": "最終Stack",
+                    "profit": "素点収支",
+                    "handicap_profit": "handicap収支",
+                }
+            ),
+            use_container_width=True,
+        )
+
+        # チーム別集計
+        st.subheader("チームランキング（素点収支 / handicap収支）")
+        team_agg = (
+            df_rank.groupby("team")
+            .agg(
+                {
+                    "profit": "sum",
+                    "handicap_profit": "sum",
+                    "player_id": "count",
+                }
+            )
+            .rename(columns={"player_id": "人数"})
+            .reset_index()
+        )
+
+        team_agg = team_agg.sort_values(by="profit", ascending=False)
+        st.dataframe(
+            team_agg.rename(
+                columns={
+                    "team": "チーム",
+                    "profit": "素点収支合計",
+                    "handicap_profit": "handicap収支合計",
+                }
+            ),
+            use_container_width=True,
+        )
