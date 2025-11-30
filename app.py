@@ -299,9 +299,9 @@ else:
 
         with st.container():
             st.markdown(
-                "<div class='player-card-container'>",
-                unsafe_allow_html=True,
-            )
+    f"<div style='font-size: 1.3rem; font-weight: 700; color: white;'>{row['name']}</div>",
+    unsafe_allow_html=True
+)
 
             top_cols = st.columns([3, 1, 1])
             with top_cols[0]:
