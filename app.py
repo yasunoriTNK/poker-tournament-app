@@ -47,7 +47,8 @@ def get_worksheet():
                 "rebuy_history",
             ]
         )
-    # rebuy_history 列が無かったら追加
+
+    # rebuy_history 列が無かったらヘッダーに追加
     header = ws.row_values(1)
     if "rebuy_history" not in header:
         header.append("rebuy_history")
@@ -79,6 +80,7 @@ def load_players_df() -> pd.DataFrame:
                 "rebuy_history",
             ]
         )
+
     df = pd.DataFrame(rows[1:], columns=rows[0])
 
     numeric_cols = ["initial_buyin", "rebuy_total", "rebuy_times", "final_stack"]
@@ -92,7 +94,7 @@ def load_players_df() -> pd.DataFrame:
 
 
 # ==============================
-# シート更新
+# 行操作（追加・更新・削除）
 # ==============================
 def append_player_row(p: dict):
     ws = get_worksheet()
@@ -106,10 +108,10 @@ def append_player_row(p: dict):
             p["initial_buyin"],
             p["rebuy_total"],
             p["rebuy_times"],
-            "",
+            "",  # final_stack
             now,
             now,
-            "",
+            "",  # rebuy_history
         ]
     )
     load_players_df.clear()
@@ -121,13 +123,26 @@ def update_player_row(player_id: str, updates: dict):
     if player_id not in df["player_id"].values:
         return
     row_index = df.index[df["player_id"] == player_id][0]
-    sheet_row = row_index + 2
+    sheet_row = row_index + 2  # header 行を除いて +2
 
     for k, v in updates.items():
+        if k not in df.columns:
+            continue
         col_index = df.columns.get_loc(k) + 1
         ws.update_cell(sheet_row, col_index, "" if v is None else v)
 
     ws.update_cell(sheet_row, df.columns.get_loc("updated_at") + 1, datetime.utcnow().isoformat())
+    load_players_df.clear()
+
+
+def delete_player_row(player_id: str):
+    ws = get_worksheet()
+    df = load_players_df()
+    if player_id not in df["player_id"].values:
+        return
+    row_index = df.index[df["player_id"] == player_id][0]
+    sheet_row = row_index + 2
+    ws.delete_rows(sheet_row)
     load_players_df.clear()
 
 
@@ -157,14 +172,51 @@ def reset_players_sheet():
 # ==============================
 st.set_page_config(page_title="ポーカー大会 収支集計アプリ", page_icon="🃏", layout="centered")
 
+# スタイル
 st.markdown(
     """
     <style>
     h1.main-title { font-size: 1.4rem; font-weight: 700; }
     h4.small-subheader { font-size: 0.95rem; font-weight: 700; margin: 0.5rem 0; }
-    .player-card-container { background-color:#24293a; padding:0.6rem 0.9rem; border-radius:1rem; margin-bottom:0.4rem;}
+
+    .player-card-container {
+        background-color:#24293a;
+        padding:0.6rem 0.9rem;
+        border-radius:1rem;
+        margin-bottom:0.4rem;
+    }
     .player-card-name { color:white; font-size:1.05rem; font-weight:700; }
     .player-card-meta { color:#e5e7eb; font-size:0.85rem; }
+
+    .badge {
+        display:inline-block;
+        padding:0.05rem 0.55rem;
+        border-radius:999px;
+        font-size:0.7rem;
+        border:1px solid rgba(255,255,255,0.4);
+        margin-left:0.25rem;
+    }
+    .badge-team-cse {
+        border-color:#3b82f6;
+        color:#3b82f6;
+        background-color:rgba(59,130,246,0.08);
+    }
+    .badge-team-rc {
+        border-color:#f97316;
+        color:#f97316;
+        background-color:rgba(249,115,22,0.08);
+    }
+    .badge-skill-beginner {
+        border-color:#22c55e;
+        color:#22c55e;
+        background-color:rgba(34,197,94,0.08);
+    }
+    .badge-skill-expert {
+        border-color:#facc15;
+        color:#facc15;
+        background-color:rgba(250,204,21,0.08);
+    }
+
     .player-separator { border-top:1px solid rgba(255,255,255,0.25); }
     </style>
     """,
@@ -179,12 +231,23 @@ def small_subheader(text: str):
 st.markdown("<h1 class='main-title'>ポーカー大会 収支集計アプリ</h1>", unsafe_allow_html=True)
 st.caption("Buy-in（バイイン）、Re-buy（リバイ）を登録し、収支を自動で集計。")
 
-
 df = load_players_df()
 
+# ==============================
+# ルール表示
+# ==============================
+st.markdown(
+    """
+**ルール：**
+
+- 個人順位、チーム順位（CSE / RC）を集計  
+- handicap：経験者は最終持ち点を半分（マイナスの場合は2倍）、初心者は最終持ち点を2倍（マイナスの場合は半分）に  
+- 素点収支集計・handicap収支集計の双方を実施  
+"""
+)
 
 # ==============================
-# プレイヤー登録 UI
+# 1. プレイヤー登録
 # ==============================
 st.header("1. プレイヤー登録")
 
@@ -210,10 +273,10 @@ if submitted:
         append_player_row(
             {
                 "player_id": str(uuid.uuid4()),
-                "name": name,
+                "name": name.strip(),
                 "team": team,
                 "skill": skill,
-                "initial_buyin": initial_buyin,
+                "initial_buyin": int(initial_buyin),
                 "rebuy_total": 0,
                 "rebuy_times": 0,
             }
@@ -221,59 +284,125 @@ if submitted:
         st.success(f"{name} を登録しました")
         st.rerun()
 
-
 df = load_players_df()
 st.metric("参加人数", len(df))
 
 
 # ==============================
-# プレイヤー一覧 & Rebuy管理
+# 2. プレイヤー一覧・途中経過（Re-buy & 削除）
 # ==============================
 st.header("2. プレイヤー一覧・途中経過")
+
 if df.empty:
     st.info("プレイヤーがまだ登録されていません。")
 else:
     for i, (_, row) in enumerate(df.iterrows()):
         pid = row["player_id"]
         name = row["name"]
-        rebuy_total = int(row["rebuy_total"])
-        rebuy_times = int(row["rebuy_times"])
+        team = row["team"]
+        skill = row["skill"]
+        rebuy_total = int(row["rebuy_total"]) if not pd.isna(row["rebuy_total"]) else 0
+        rebuy_times = int(row["rebuy_times"]) if not pd.isna(row["rebuy_times"]) else 0
+        final_stack = (
+            None if pd.isna(row["final_stack"]) or row["final_stack"] == "" else int(row["final_stack"])
+        )
         history = row["rebuy_history"] or ""
 
         with st.container():
             st.markdown("<div class='player-card-container'>", unsafe_allow_html=True)
-            st.markdown(f"<div class='player-card-name'>{name}</div>", unsafe_allow_html=True)
-            st.markdown(
-                f"<div class='player-card-meta'>Rebuy合計: {rebuy_total:,}（{rebuy_times}回）</div>",
-                unsafe_allow_html=True,
+
+            # 上段：名前 + バッジ
+            c_name, c_badge = st.columns([3, 2])
+            with c_name:
+                st.markdown(f"<div class='player-card-name'>{name}</div>", unsafe_allow_html=True)
+                st.markdown(
+                    f"<div class='player-card-meta'>"
+                    f"Re-buy合計: {rebuy_total:,}（{rebuy_times}回）　"
+                    f"最終Stack: {('未入力' if final_stack is None else f'{final_stack:,}')}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            with c_badge:
+                team_class = "badge-team-cse" if team == "CSE" else "badge-team-rc"
+                skill_class = "badge-skill-beginner" if skill == "初心者" else "badge-skill-expert"
+                st.markdown(
+                    f"<div style='text-align:right;'>"
+                    f"<span class='badge {team_class}'>{team}</span>"
+                    f"<span class='badge {skill_class}'>{skill}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+            # 中段：Re-buy 入力 & 追加 / 取消
+            col1, col2, col3 = st.columns([3, 2, 2])
+            rebuy_val = col1.number_input(
+                "",
+                step=1000,
+                min_value=0,
+                key=f"rb_{pid}",
+                label_visibility="collapsed",
             )
 
-            col1, col2, col3 = st.columns([3, 2, 2])
-            val = col1.number_input("", step=1000, min_value=0, key=f"rb_{pid}", label_visibility="collapsed")
-
             if col2.button("＋ Re-buy", key=f"rba_{pid}"):
-                new_total = rebuy_total + val
-                new_times = rebuy_times + 1
-                new_history = f"{history},{val}" if history else str(val)
-                update_player_row(pid, {"rebuy_total": new_total, "rebuy_times": new_times, "rebuy_history": new_history})
-                st.rerun()
+                if rebuy_val <= 0:
+                    st.warning("Re-buy額は正の数を入力してください")
+                else:
+                    new_total = rebuy_total + int(rebuy_val)
+                    new_times = rebuy_times + 1
+                    new_history = f"{history},{int(rebuy_val)}" if history else str(int(rebuy_val))
+                    update_player_row(
+                        pid,
+                        {
+                            "rebuy_total": new_total,
+                            "rebuy_times": new_times,
+                            "rebuy_history": new_history,
+                        },
+                    )
+                    st.success(f"{name} に Re-buy {int(rebuy_val):,} を追加しました")
+                    st.rerun()
 
-            if col3.button("↺ 取消", key=f"rbc_{pid}"):
+            if col3.button("↺ 直近Re-buy取消", key=f"rbc_{pid}"):
                 if not history:
                     st.warning("取り消す Re-buy がありません")
                 else:
                     parts = [int(x) for x in history.split(",") if x]
-                    last = parts.pop()
-                    update_player_row(
-                        pid,
-                        {
-                            "rebuy_total": rebuy_total - last,
-                            "rebuy_times": rebuy_times - 1,
-                            "rebuy_history": ",".join([str(x) for x in parts]),
-                        },
-                    )
-                    st.success(f"{name} の Re-buy {last:,} を取消しました")
-                st.rerun()
+                    if not parts:
+                        st.warning("取り消す Re-buy がありません")
+                    else:
+                        last = parts.pop()
+                        new_history = ",".join(str(x) for x in parts)
+                        new_total = rebuy_total - last
+                        new_times = rebuy_times - 1
+                        if new_total < 0:
+                            new_total = 0
+                        if new_times < 0:
+                            new_times = 0
+                        update_player_row(
+                            pid,
+                            {
+                                "rebuy_total": new_total,
+                                "rebuy_times": new_times,
+                                "rebuy_history": new_history,
+                            },
+                        )
+                        st.success(f"{name} の Re-buy {last:,} を取消しました")
+                        st.rerun()
+
+            # 下段：プレイヤー削除ボタン（2段階確認）
+            col_sp, col_del = st.columns([5, 1])
+            with col_del:
+                del_key = f"confirm_delete_{pid}"
+                btn_label = "🗑 削除"
+                if st.button(btn_label, key=f"del_{pid}"):
+                    # 1回目：確認フラグを立てて警告
+                    if not st.session_state.get(del_key, False):
+                        st.session_state[del_key] = True
+                        st.warning(f"{name} を削除しますか？もう一度ボタンを押すと削除されます。")
+                    else:
+                        delete_player_row(pid)
+                        st.session_state[del_key] = False
+                        st.success(f"{name} を削除しました")
+                        st.rerun()
 
             st.markdown("</div>", unsafe_allow_html=True)
 
@@ -284,28 +413,37 @@ st.markdown("---")
 
 
 # ==============================
-# 最終Stack登録
+# 3. 最終Stack登録
 # ==============================
 st.header("3. 最終Stack登録")
 
-for _, row in df.iterrows():
-    pid = row["player_id"]
-    name = row["name"]
-    val = int(row["final_stack"]) if not pd.isna(row["final_stack"]) else 0
+if df.empty:
+    st.info("プレイヤーがまだ登録されていません。")
+else:
+    for _, row in df.iterrows():
+        pid = row["player_id"]
+        name = row["name"]
+        val = int(row["final_stack"]) if not pd.isna(row["final_stack"]) else 0
 
-    c1, c2, c3 = st.columns([3, 2, 2])
-    c1.write(f"**{name}**")
-    new_stack = c2.number_input("", value=val, step=1000, key=f"fs_{pid}", label_visibility="collapsed")
-    if c3.button("登録", key=f"fsb_{pid}"):
-        update_player_row(pid, {"final_stack": new_stack})
-        st.success(f"{name} のStackを登録しました")
-        st.rerun()
+        c1, c2, c3 = st.columns([3, 2, 2])
+        c1.write(f"**{name}**")
+        new_stack = c2.number_input(
+            "",
+            value=val,
+            step=1000,
+            key=f"fs_{pid}",
+            label_visibility="collapsed",
+        )
+        if c3.button("登録", key=f"fsb_{pid}"):
+            update_player_row(pid, {"final_stack": int(new_stack)})
+            st.success(f"{name} のStackを登録しました")
+            st.rerun()
 
 st.markdown("---")
 
 
 # ==============================
-# 集計 & ランキング
+# 4. ランキング
 # ==============================
 st.header("4. ランキング")
 
@@ -319,67 +457,89 @@ if missing:
 df_rank = df_rank.dropna(subset=["final_stack"])
 if len(df_rank) == 0:
     st.info("まだランキングを計算できません。")
-    st.stop()
+else:
+    df_rank["initial_buyin"] = pd.to_numeric(df_rank["initial_buyin"], errors="coerce").fillna(0)
+    df_rank["rebuy_total"] = pd.to_numeric(df_rank["rebuy_total"], errors="coerce").fillna(0)
 
-df_rank["profit"] = df_rank["final_stack"] - (df_rank["initial_buyin"] + df_rank["rebuy_total"])
+    # 素点収支
+    df_rank["profit"] = df_rank["final_stack"] - (
+        df_rank["initial_buyin"] + df_rank["rebuy_total"]
+    )
 
-def handicap(row):
-    p = row["profit"]
-    if p >= 0:
-        return int(p * 2) if row["skill"] == "初心者" else int(p * 0.5)
-    else:
-        return int(p * 0.5) if row["skill"] == "初心者" else int(p * 2)
+    # handicap収支
+    def handicap(row):
+        p = row["profit"]
+        if pd.isna(p):
+            return None
+        if p >= 0:
+            return int(p * 2) if row["skill"] == "初心者" else int(p * 0.5)
+        else:
+            return int(p * 0.5) if row["skill"] == "初心者" else int(p * 2)
 
-df_rank["handicap_profit"] = df_rank.apply(handicap, axis=1)
+    df_rank["handicap_profit"] = df_rank.apply(handicap, axis=1)
 
-# ---- 個人
-small_subheader("個人ランキング（素点収支）")
-st.dataframe(
-    df_rank.sort_values("profit", ascending=False)[["name", "skill", "team", "profit"]]
-    .rename(columns={"name": "プレイヤー", "skill": "スキル", "team": "チーム", "profit": "素点収支"}),
-    use_container_width=True,
-)
+    # ---- 個人ランキング（素点）
+    small_subheader("個人ランキング（素点収支）")
+    table_profit = (
+        df_rank.sort_values("profit", ascending=False)[["name", "skill", "team", "profit"]]
+        .rename(
+            columns={
+                "name": "プレイヤー",
+                "skill": "スキル",
+                "team": "チーム",
+                "profit": "素点収支",
+            }
+        )
+        .reset_index(drop=True)
+    )
+    st.dataframe(table_profit, use_container_width=True)
 
-small_subheader("個人ランキング（handicap収支）")
-st.dataframe(
-    df_rank.sort_values("handicap_profit", ascending=False)[
-        ["name", "skill", "team", "handicap_profit"]
-    ].rename(
-        columns={
-            "name": "プレイヤー",
-            "skill": "スキル",
-            "team": "チーム",
-            "handicap_profit": "handicap収支",
-        }
-    ),
-    use_container_width=True,
-)
+    # ---- 個人ランキング（handicap）
+    small_subheader("個人ランキング（handicap収支）")
+    table_handicap = (
+        df_rank.sort_values("handicap_profit", ascending=False)[
+            ["name", "skill", "team", "handicap_profit"]
+        ]
+        .rename(
+            columns={
+                "name": "プレイヤー",
+                "skill": "スキル",
+                "team": "チーム",
+                "handicap_profit": "Handicap収支",
+            }
+        )
+        .reset_index(drop=True)
+    )
+    st.dataframe(table_handicap, use_container_width=True)
 
+    # ---- チームランキング
+    group_score = (
+        df_rank.groupby("team", as_index=False)
+        .agg({"profit": "sum", "handicap_profit": "sum"})
+        .rename(columns={"team": "チーム", "profit": "素点収支", "handicap_profit": "Handicap収支"})
+    )
 
-# ---- チーム集計
-group_score = df_rank.groupby("team", as_index=False).agg(
-    {"profit": "sum", "handicap_profit": "sum"}
-)
+    # 素点収支チームランキング：チーム, 素点収支
+    small_subheader("チームランキング（素点収支）")
+    table_team_profit = (
+        group_score.sort_values("素点収支", ascending=False)[["チーム", "素点収支"]]
+        .reset_index(drop=True)
+    )
+    st.dataframe(table_team_profit, use_container_width=True)
 
-small_subheader("チームランキング（素点収支）")
-st.dataframe(
-    group_score.sort_values("profit", ascending=False)
-    .rename(columns={"team": "チーム", "profit": "素点収支"}),
-    use_container_width=True,
-)
-
-small_subheader("チームランキング（handicap収支）")
-st.dataframe(
-    group_score.sort_values("handicap_profit", ascending=False)
-    .rename(columns={"team": "チーム", "handicap_profit": "handicap収支"}),
-    use_container_width=True,
-)
+    # Handicap収支チームランキング：チーム, Handicap収支
+    small_subheader("チームランキング（handicap収支）")
+    table_team_handicap = (
+        group_score.sort_values("Handicap収支", ascending=False)[["チーム", "Handicap収支"]]
+        .reset_index(drop=True)
+    )
+    st.dataframe(table_team_handicap, use_container_width=True)
 
 st.markdown("---")
 
 
 # ==============================
-# リセット
+# 5. データリセット
 # ==============================
 st.subheader("データリセット（注意）")
 with st.expander("データをリセット（元に戻せません）"):
