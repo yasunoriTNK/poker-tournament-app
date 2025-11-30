@@ -171,7 +171,7 @@ st.set_page_config(
     layout="centered",
 )
 
-# スマホ向けのコンパクトなプレイヤーカード用 CSS
+# スマホ向けのコンパクトなプレイヤーカード用 CSS とタイトル縮小
 st.markdown(
     """
     <style>
@@ -224,12 +224,22 @@ st.markdown(
         border: none;
         border-top: 1px solid rgba(148, 163, 184, 0.35);
     }
+    /* タイトルを1行に収まりやすいサイズに */
+    h1.app-title-main {
+        font-size: 1.4rem;
+        font-weight: 700;
+        margin-bottom: 0.2rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-st.title("ポーカー大会 収支集計アプリ")
+# カスタムタイトル（1行に収まりやすい）
+st.markdown(
+    "<h1 class='app-title-main'>ポーカー大会 収支集計アプリ</h1>",
+    unsafe_allow_html=True,
+)
 st.caption("Buy-in（バイイン）、Re-buy（リバイ）を登録し、収支を自動で集計。")
 
 df = load_players_df()
@@ -516,12 +526,12 @@ else:
         df_individual = df_rank.sort_values(
             by=["profit", "created_at"], ascending=[False, True]
         ).reset_index(drop=True)
-        df_individual["No"] = df_individual.index + 1
 
-        table_individual = df_individual[["No", "name", "skill", "profit"]].rename(
+        table_individual = df_individual[["name", "skill", "team", "profit"]].rename(
             columns={
                 "name": "プレイヤー",
                 "skill": "スキル",
+                "team": "チーム",
                 "profit": "素点収支",
             }
         )
@@ -539,14 +549,14 @@ else:
         df_individual_h = df_rank.sort_values(
             by=["handicap_profit", "created_at"], ascending=[False, True]
         ).reset_index(drop=True)
-        df_individual_h["No"] = df_individual_h.index + 1
 
         table_individual_h = df_individual_h[
-            ["No", "name", "skill", "handicap_profit"]
+            ["name", "skill", "team", "handicap_profit"]
         ].rename(
             columns={
                 "name": "プレイヤー",
                 "skill": "スキル",
+                "team": "チーム",
                 "handicap_profit": "handicap収支",
             }
         )
@@ -576,9 +586,8 @@ else:
 
         # 素点収支ランキング
         team_profit_rank = team_agg.sort_values(by="profit", ascending=False).reset_index(drop=True)
-        team_profit_rank["No"] = team_profit_rank.index + 1
         table_team_profit = team_profit_rank[
-            ["No", "team", "人数", "profit"]
+            ["team", "人数", "profit"]
         ].rename(
             columns={
                 "team": "チーム",
@@ -596,9 +605,8 @@ else:
         team_handicap_rank = team_agg.sort_values(
             by="handicap_profit", ascending=False
         ).reset_index(drop=True)
-        team_handicap_rank["No"] = team_handicap_rank.index + 1
         table_team_handicap = team_handicap_rank[
-            ["No", "team", "人数", "handicap_profit"]
+            ["team", "人数", "handicap_profit"]
         ].rename(
             columns={
                 "team": "チーム",
