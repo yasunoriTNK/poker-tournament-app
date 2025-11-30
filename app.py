@@ -596,7 +596,7 @@ else:
 # --------------------------
 
 st.markdown("---")
-st.subheader(⚠️ データリセット")
+st.subheader("\N{WARNING SIGN} データリセット")
 
 with st.expander("データリセット（注意）"):
     st.warning("全プレイヤー情報を削除し、登録状態を初期化します。元に戻せません。")
